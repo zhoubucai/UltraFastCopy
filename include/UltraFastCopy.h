@@ -7,6 +7,7 @@
 #include <limits>
 #include <vector>
 #include <thread>
+#include <algorithm>
 //分块并非真的将文件切割，而是记录文件块的起始位置和块大小
 //支持拷贝的文件最大是 2^64-1 字节 ，约2^34GiB
 struct FileBlock {
@@ -33,7 +34,7 @@ private:
 	//计算当前系统最优读写大小，即单次read/write的大小
 	uint64_t CalculateOptimalIOSize() noexcept;
 	//计算当前系统最优的块数量
-	uint64_t CalculateBlockNum() noexcept;
+	uint64_t CalculateBlockNum(uint64_t fileSize) noexcept;
 	//切割文件
 	void SplitFile(const std::string& filePath) noexcept;
 	//线程函数：拷贝文件块

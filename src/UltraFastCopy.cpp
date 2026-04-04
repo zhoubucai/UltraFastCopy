@@ -43,8 +43,13 @@ uint64_t UltraFastCopy::CalculateOptimalIOSize() noexcept{
 	return 4 * 1024;//todo
 }
 //计算当前系统最优的块数量，即文件分块数量
-uint64_t UltraFastCopy::CalculateBlockNum() noexcept{
-	return 8;//todo
+uint64_t UltraFastCopy::CalculateBlockNum(uint64_t fileSize) noexcept{
+	const uint64_t MIN_BLOCK_SIZE = 32 * 1024 * 1024;//最小处理阈值，如果文件大小低于32MB则不分块，减少线程创建的开销（todo，32MB并非严格测试后的最优值，而是暂定值）
+	if(fileSize < MIN_BLOCK_SIZE) return 1;
+	uint64_t suggestedByFileSize = fileSize / MIN_BLOCK_SIZE;//根据文件大小计算出分块数量
+	uint64_t cpuCore = std::thread::hardware_concurrency();//获取系统cpu核心数
+	const uint64_t MAX_IO_THREADS = 16;//线程数上限（todo，暂定值，不同存储介质该值不同，例如机械硬盘最合适的线程数是1）
+	return std::min({suggestedByFileSize,cpuCore,MAX_IO_THREADS});//取最小值
 }
 //切割文件
 void UltraFastCopy::SplitFile(const std::string& filePath) noexcept{
@@ -56,7 +61,7 @@ void UltraFastCopy::SplitFile(const std::string& filePath) noexcept{
 			return;
 		}
         else _blocks=new std::vector<FileBlock*>;
-        uint64_t blockNum = CalculateBlockNum();
+        uint64_t blockNum = CalculateBlockNum(fileSize);
 	    uint64_t blockSize = fileSize / blockNum;
 	    uint64_t remainSize = fileSize % blockNum;//剩余字节数，最后一个块处理
         for (uint64_t i = 0; i < blockNum; ++i) {
@@ -130,8 +135,9 @@ void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std
 	destinationFile.close();
 	//启动线程拷贝各个块
 	try{
+		int threadNum=_blocks->size();//数据块数量即线程数量
 		//初始化线程容器
-		for (int i = 0; i < 8; ++i) copyThreads.emplace_back(&UltraFastCopy::CopyBlock, this, sourceFilePath, destinationFilePath, (*_blocks)[i], i);
+		for (int i = 0; i < threadNum; ++i) copyThreads.emplace_back(&UltraFastCopy::CopyBlock, this, sourceFilePath, destinationFilePath, (*_blocks)[i], i);
 		//等待所有线程运行完毕
 		for (auto& copyThread : copyThreads) {
 			copyThread.join();
