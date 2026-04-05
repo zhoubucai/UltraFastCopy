@@ -40,7 +40,11 @@ uint64_t UltraFastCopy::GetFileSize(const std::string& filePath) {
 }
 //计算当前系统最优读写大小，即单次read/write的大小
 uint64_t UltraFastCopy::CalculateOptimalIOSize() noexcept{
-	return 4 * 1024;//todo
+	//现代 NVMe/SSD 高速存储设备的顺序读写甜点通常在 1MB - 4MB 之间
+    //采用 4MB 缓冲区，极大减少系统调用(Context Switch)次数
+	//注：4MB既是单次IO大小，也是线程缓冲区的大小，最多16线程，则最多会预分配64MB的内存
+	//todo：当前 4MB 为经验值，未来需通过 OS API 动态获取底层文件系统/块设备的最优 I/O 大小
+	return 4 * 1024 * 1024;//4MB
 }
 //计算当前系统最优的块数量，即文件分块数量
 uint64_t UltraFastCopy::CalculateBlockNum(uint64_t fileSize) noexcept{
