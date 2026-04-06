@@ -1,13 +1,8 @@
 #pragma once
-#include <iostream>
 #include <cstdint>
 #include <string>
-#include <fstream>
-#include <stdexcept>
-#include <limits>
 #include <vector>
-#include <thread>
-#include <algorithm>
+
 //分块并非真的将文件切割，而是记录文件块的起始位置和块大小
 //支持拷贝的文件最大是 2^64-1 字节 ，约2^34GiB
 struct FileBlock {
