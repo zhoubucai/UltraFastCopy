@@ -1,6 +1,8 @@
 #include "../include/UltraFastCopy.h"
 #include "../include/Utils.h"
 #include "../include/Logger.h"
+#include <filesystem>
+#include <system_error>
 
 extern Logger g_log;
 
@@ -121,8 +123,20 @@ void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std
 	if (_blocks == nullptr) return;
 	//创建线程容器
 	std::vector<std::thread> copyThreads;
-    //构建目标文件路径并创建目标文件
+    //构建目标文件路径
     std::string destinationFilePath=destinationDirectoryPath+"/"+Utils::GetFileName(sourceFilePath);
+	//检查目标文件目录是否存在，不存在则创建
+	std::filesystem::path destDir(destinationDirectoryPath);
+	if(!std::filesystem::exists(destDir)){
+		std::error_code ec;
+		if(std::filesystem::create_directories(destDir,ec)){
+			LOG_INFO("目标目录不存在，已自动级联创建: " + destDir.string());
+		}
+		else if(ec){
+			LOG_ERROR("目标目录不存在，且级联创建失败: " + destDir.string() + ", 错误信息: " + ec.message());
+			std::exit(1);
+		}
+	}
 	std::ofstream destinationFile(destinationFilePath, std::ios::binary | std::ios::out);
 	if(!destinationFile.is_open()) {
 		LOG_ERROR("创建目标文件失败: " + destinationFilePath);
