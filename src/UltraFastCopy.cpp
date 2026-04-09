@@ -9,12 +9,14 @@
 #include <stdexcept>
 #include <limits>
 #include <cstdlib>
+#include <chrono>
+#include <iostream>
 
 extern Logger g_log;
 
 // -------------------------- 构造/析构函数实现 --------------------------
 //构造函数
-UltraFastCopy::UltraFastCopy() noexcept : _blocks(nullptr) {}
+UltraFastCopy::UltraFastCopy() noexcept : _blocks(nullptr), _totalCopiedSize(0), _isCopyDone(false){}
 //析构函数
 UltraFastCopy::~UltraFastCopy() noexcept {
     if(_blocks){
@@ -65,7 +67,7 @@ uint64_t UltraFastCopy::CalculateBlockNum(uint64_t fileSize) noexcept{
 }
 //切割文件
 void UltraFastCopy::SplitFile(const std::string& filePath) noexcept{
-	LOG_INFO("开始文件分块: " + filePath);
+	LOG_DEBUG("开始文件分块: " + filePath);
     try{
         uint64_t fileSize = GetFileSize(filePath);
         if (fileSize == 0){
@@ -83,7 +85,7 @@ void UltraFastCopy::SplitFile(const std::string& filePath) noexcept{
             else fileBlock->_blockSize = blockSize;
             _blocks->push_back(fileBlock);
         }
-        LOG_INFO("文件分块完成: " + filePath);
+        LOG_DEBUG("文件分块完成: " + filePath);
     }catch(const std::exception& e){
         LOG_ERROR(e.what());
         LOG_ERROR("文件分块失败: " + filePath);
@@ -117,12 +119,13 @@ void UltraFastCopy::CopyBlock(const std::string& sourceFilePath, const std::stri
 		destinationFile.write(buffer.data(), readSize);
 		if (destinationFile.fail()) throw std::runtime_error("线程" + std::to_string(threadID) + "写入数据失败: " + destinationFilePath);
 		copiedSize += readSize;
-		LOG_INFO("线程" + std::to_string(threadID) + "本次拷贝" + std::to_string(toRead) + "字节，已拷贝 " + std::to_string(copiedSize) + " / " + std::to_string(fileBlock->_blockSize) + " 字节");
+		_totalCopiedSize += readSize;
+		LOG_DEBUG("线程" + std::to_string(threadID) + "本次拷贝" + std::to_string(toRead) + "字节，已拷贝 " + std::to_string(copiedSize) + " / " + std::to_string(fileBlock->_blockSize) + " 字节");
 	}
 }
 //多线程拷贝
 void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept{
-	LOG_INFO("开始多线程拷贝文件: From " + sourceFilePath + " to " + destinationDirectoryPath);
+	LOG_DEBUG("开始多线程拷贝文件: From " + sourceFilePath + " to " + destinationDirectoryPath);
 	//分块
 	SplitFile(sourceFilePath);
 	//判断
@@ -157,6 +160,8 @@ void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std
 		std::exit(1);
 	}
 	destinationFile.close();
+	//启动监控线程
+	StartMonitor(fileSize);
 	//启动线程拷贝各个块
 	try{
 		int threadNum=_blocks->size();//数据块数量即线程数量
@@ -166,10 +171,55 @@ void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std
 		for (auto& copyThread : copyThreads) {
 			copyThread.join();
 		}
-		LOG_INFO("文件拷贝完成: From " + sourceFilePath + " to " + destinationFilePath);
+		StopMonitor(fileSize);
+		LOG_DEBUG("文件拷贝完成: From " + sourceFilePath + " to " + destinationFilePath);
 	}catch(const std::exception& e){
+		StopMonitor(fileSize);
 		LOG_ERROR(e.what());
 		LOG_ERROR("文件拷贝失败: From " + sourceFilePath + " to " + destinationFilePath);
 		std::exit(1);
 	}
+}
+//开启监控线程
+void UltraFastCopy::StartMonitor(uint64_t fileSize) noexcept{
+	//重置拷贝大小和状态
+	_totalCopiedSize=0; 
+    _isCopyDone=false;
+	//记录开始时间
+	_startTime=std::chrono::high_resolution_clock::now();
+	//创建监控线程
+	_monitorThread=std::thread([this,fileSize](){
+		uint64_t lastCopiedSize=_totalCopiedSize.load();
+		auto lastTime=std::chrono::high_resolution_clock::now();
+		while(!_isCopyDone){
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));//每隔200毫秒刷新一次，同时释放cpu给核心拷贝线程
+			uint64_t currentCopiedSize=_totalCopiedSize.load();
+			auto currentTime=std::chrono::high_resolution_clock::now();
+			std::chrono::duration<double> elapsed=currentTime-lastTime;
+			double speedMBps=0.0;//瞬时速度
+            if (currentCopiedSize > lastCopiedSize && elapsed.count() > 0) {
+                speedMBps=static_cast<double>(currentCopiedSize-lastCopiedSize)/1024.0/1024.0/elapsed.count();
+            }
+			double progress=fileSize>0?static_cast<double>(currentCopiedSize)/fileSize*100.0:100.0;
+			std::cout << "\r\033[36m[监控]\033[0m 进度: " 
+                  << std::fixed << std::setprecision(1) << std::setw(5) << progress << "% | "
+                  << "速度: " << std::setw(8) << speedMBps << " MB/s | "
+                  << currentCopiedSize / 1024 / 1024 << " / " << fileSize / 1024 / 1024 << " MB " 
+                  << std::flush;
+			//更新拷贝数据
+			lastCopiedSize=currentCopiedSize;
+            lastTime=currentTime;
+		}
+	});
+}
+//停止监控线程
+void UltraFastCopy::StopMonitor(uint64_t fileSize) noexcept{
+	if(!_monitorThread.joinable()) return;//监控线程已经结束，或者没开始运行
+	_isCopyDone=true;//设置拷贝完成标志
+	_monitorThread.join();
+	std::cout<<"\n";//确保进度条不被后续日志输出干扰
+	//计算总拷贝耗时
+	auto endTime=std::chrono::high_resolution_clock::now();
+	std::chrono::duration<double> totalElapsed=endTime-_startTime;
+	LOG_INFO("✅ 性能统计: 总耗时 " + std::to_string(totalElapsed.count()) + " 秒");
 }

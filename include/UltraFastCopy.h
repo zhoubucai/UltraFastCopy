@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 //分块并非真的将文件切割，而是记录文件块的起始位置和块大小
 //支持拷贝的文件最大是 2^64-1 字节 ，约2^34GiB
@@ -14,6 +17,10 @@ struct FileBlock {
 class UltraFastCopy {
 private:
 	std::vector<FileBlock*>* _blocks;
+	std::atomic<uint64_t> _totalCopiedSize;//记录所有线程已拷贝的字节数
+	bool _isCopyDone;//标志拷贝是否完成
+	std::thread _monitorThread;//监控线程对象
+	std::chrono::time_point<std::chrono::high_resolution_clock> _startTime;//开始时间
 public:
 	//构造函数
 	UltraFastCopy() noexcept;
@@ -36,4 +43,8 @@ private:
 	void CopyBlock(const std::string& sourceFilePath, const std::string& destinationFilePath, FileBlock* fileBlock, int threadID);
 	//多线程拷贝
 	void MultiThreadCopy(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept;
+	//开启监控线程
+	void StartMonitor(uint64_t fileSize) noexcept;
+	//停止监控线程
+	void StopMonitor(uint64_t fileSize) noexcept;
 };
