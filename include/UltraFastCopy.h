@@ -34,7 +34,7 @@ private:
 	//获取文件大小
 	uint64_t GetFileSize(const std::string& filePath);
 	//计算当前系统最优读写大小，即单次read/write的大小
-	uint64_t CalculateOptimalIOSize() noexcept;
+	uint64_t CalculateOptimalIOSize(bool isRotationalDisk=false) noexcept;
 	//计算当前系统最优的块数量
 	uint64_t CalculateBlockNum(uint64_t fileSize) noexcept;
 	//切割文件
@@ -43,8 +43,10 @@ private:
 	void CopyBlock(const std::string& sourceFilePath, const std::string& destinationFilePath, FileBlock* fileBlock, int threadID);
 	//多线程拷贝
 	void MultiThreadCopy(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept;
+	//单线程拷贝
+	void SingleThreadCopy(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept;
 	//开启监控线程
 	void StartMonitor(uint64_t fileSize) noexcept;
 	//停止监控线程
-	void StopMonitor(uint64_t fileSize) noexcept;
+	void StopMonitor() noexcept;
 };

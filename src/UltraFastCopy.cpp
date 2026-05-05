@@ -28,7 +28,12 @@ UltraFastCopy::~UltraFastCopy() noexcept {
 // -------------------------- 公有函数实现 --------------------------
 //开始拷贝
 void UltraFastCopy::Start(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept{
-	MultiThreadCopy(sourceFilePath, destinationDirectoryPath);
+	if(Utils::IsRotationalDisk(sourceFilePath) || Utils::IsRotationalDisk(destinationDirectoryPath)){
+		SingleThreadCopy(sourceFilePath,destinationDirectoryPath);
+	}
+	else{
+		MultiThreadCopy(sourceFilePath, destinationDirectoryPath);
+	}
 }
 
 // -------------------------- 私有函数实现 --------------------------
@@ -49,11 +54,12 @@ uint64_t UltraFastCopy::GetFileSize(const std::string& filePath) {
 	return static_cast<uint64_t>(pos);
 }
 //计算当前系统最优读写大小，即单次read/write的大小
-uint64_t UltraFastCopy::CalculateOptimalIOSize() noexcept{
+uint64_t UltraFastCopy::CalculateOptimalIOSize(bool isRotationalDisk) noexcept{
 	//现代 NVMe/SSD 高速存储设备的顺序读写甜点通常在 1MB - 4MB 之间
     //采用 4MB 缓冲区，极大减少系统调用(Context Switch)次数
 	//注：4MB既是单次IO大小，也是线程缓冲区的大小，最多16线程，则最多会预分配64MB的内存
 	//todo：当前 4MB 为经验值，未来需通过 OS API 动态获取底层文件系统/块设备的最优 I/O 大小
+	if(isRotationalDisk) return 1 * 1024 * 1024;//1MB
 	return 4 * 1024 * 1024;//4MB
 }
 //计算当前系统最优的块数量，即文件分块数量
@@ -171,12 +177,88 @@ void UltraFastCopy::MultiThreadCopy(const std::string& sourceFilePath, const std
 		for (auto& copyThread : copyThreads) {
 			copyThread.join();
 		}
-		StopMonitor(fileSize);
+		StopMonitor();
 		LOG_DEBUG("文件拷贝完成: From " + sourceFilePath + " to " + destinationFilePath);
 	}catch(const std::exception& e){
-		StopMonitor(fileSize);
+		StopMonitor();
 		LOG_ERROR(e.what());
 		LOG_ERROR("文件拷贝失败: From " + sourceFilePath + " to " + destinationFilePath);
+		std::exit(1);
+	}
+}
+//单线程拷贝
+void UltraFastCopy::SingleThreadCopy(const std::string& sourceFilePath, const std::string& destinationDirectoryPath) noexcept{
+	try{
+		LOG_DEBUG("开始单线程拷贝文件: From " + sourceFilePath + " to " + destinationDirectoryPath);
+		//构建目标文件路径
+		std::string destinationFilePath=destinationDirectoryPath+"/"+Utils::GetFileName(sourceFilePath);
+		//检查目标文件目录是否存在，不存在则创建
+		std::filesystem::path destDir(destinationDirectoryPath);
+		if(!std::filesystem::exists(destDir)){
+			std::error_code ec;
+			if(std::filesystem::create_directories(destDir,ec)){
+				LOG_INFO("目标目录不存在，已自动级联创建: " + destDir.string());
+			}
+			else if(ec){
+				LOG_ERROR("目标目录不存在，且级联创建失败: " + destDir.string() + ", 错误信息: " + ec.message());
+				std::exit(1);
+			}
+		}
+		//创建目标文件
+		std::ofstream destinationFile(destinationFilePath, std::ios::binary | std::ios::out);
+		if(!destinationFile.is_open()) {
+			LOG_ERROR("创建目标文件失败: " + destinationFilePath);
+			std::exit(1);
+		}
+		//预分配目标文件大小
+		uint64_t fileSize=GetFileSize(sourceFilePath);
+		destinationFile.seekp(fileSize - 1);//定位到文件末尾
+		destinationFile.write("", 1);//写入一个字节以扩展文件大小
+		if(destinationFile.fail()){
+			LOG_ERROR("预分配目标文件大小失败: " + destinationFilePath);
+			std::exit(1);
+		}
+		//重置目标文件写指针
+		destinationFile.seekp(0);
+		//创建源文件对象
+		std::ifstream sourceFile(sourceFilePath);
+		if(!sourceFile.is_open()){
+			LOG_ERROR("打开源文件失败: "+sourceFilePath);
+			std::exit(1);
+		}
+		//创建线程缓冲区（预分配内存，避免动态扩容）
+		uint64_t optimalIOSize = CalculateOptimalIOSize(true);//单次最优读写大小
+		std::vector<char> buffer(optimalIOSize);
+		//启动监控线程
+		StartMonitor(fileSize);
+		//拷贝
+		uint64_t copiedSize=0;
+		while(copiedSize<fileSize){
+			uint64_t toRead=std::min(fileSize-copiedSize,optimalIOSize);//每次读取的字节数不能超过块剩余大小
+			sourceFile.read(buffer.data(),toRead);
+			if(sourceFile.fail()){
+				LOG_ERROR("读取数据失败: "+sourceFilePath);
+				std::exit(1);
+			}
+			uint64_t readSize=sourceFile.gcount();//实际读取到的数据
+			destinationFile.write(buffer.data(),readSize);
+			if(destinationFile.fail()){
+				LOG_ERROR("写入数据失败: "+destinationFilePath);
+				std::exit(1);
+			}
+			copiedSize+=readSize;
+			_totalCopiedSize+=readSize;
+			LOG_DEBUG("本次已拷贝: "+std::to_string(toRead) + "字节，"+ std::to_string(copiedSize) + " / " + std::to_string(fileSize) + " 字节");
+		}
+		//停止监控线程
+		StopMonitor();
+	}catch(const std::exception& e){
+		StopMonitor();
+		LOG_ERROR("单线程拷贝异常: "+std::string(e.what()));
+		std::exit(1);
+	}catch(...){
+		StopMonitor();
+		LOG_ERROR("单线程拷贝发生未知异常");
 		std::exit(1);
 	}
 }
@@ -213,7 +295,7 @@ void UltraFastCopy::StartMonitor(uint64_t fileSize) noexcept{
 	});
 }
 //停止监控线程
-void UltraFastCopy::StopMonitor(uint64_t fileSize) noexcept{
+void UltraFastCopy::StopMonitor() noexcept{
 	if(!_monitorThread.joinable()) return;//监控线程已经结束，或者没开始运行
 	_isCopyDone=true;//设置拷贝完成标志
 	_monitorThread.join();
