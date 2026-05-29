@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [v1.2.0] - 2026-05-30
+
+### 📝 工程规范 (Documentation)
+* **安装脚本**：新增 `install.sh`，支持一键安装到 `/usr/local/bin`
+* **发布脚本**：新增 `release/build.sh`，支持一键编译打包
+
 ### 🛠️ 重构与基建 (Refactor)
 * **Makefile 升级**：新增 install/uninstall 安装目标，支持 PREFIX 自定义路径，程序正式命名为 `ufcp`。
 
