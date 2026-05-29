@@ -50,7 +50,7 @@ uint64_t UltraFastCopy::GetFileSize(const std::string& filePath) {
 	if (file.fail()) throw std::runtime_error("定位文件末尾失败: " + filePath);
 	std::streampos pos = file.tellg();
 	if (pos == std::streampos(-1)) throw std::runtime_error("获取文件大小失败: " + filePath);
-	if (pos > std::numeric_limits<uint64_t>::max()) throw std::overflow_error("文件大小≥ 2^34 GiB" + filePath);
+	if (static_cast<uint64_t>(pos) > std::numeric_limits<uint64_t>::max()) throw std::overflow_error("文件大小≥ 2^34 GiB" + filePath);
 	return static_cast<uint64_t>(pos);
 }
 //计算当前系统最优读写大小，即单次read/write的大小
